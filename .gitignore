@@ -1,4 +1,5 @@
 raw_data/
+venv_linux/
 notebooks/Audio_Song_Actors_01-24
 notebooks/fixed-sample.wav
 notebooks/harvard.wav

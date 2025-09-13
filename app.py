@@ -11,6 +11,8 @@ from face_model.face_model import analyze_video
 from body_language_mod.body_model import init_model as init_body_model, analyze_video as analyze_body_video
 from speech_model.model import calculate_confidence_score, extract_audio_features, extract_visual_features_from_video, extract_audio_from_video
 
+print(">>> DEBUG: PORT from env =", os.getenv("PORT"))
+
 # Set page config
 st.set_page_config(
     page_title="Nonverbal Communication Analyzer",
