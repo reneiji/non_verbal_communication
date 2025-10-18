@@ -1,8 +1,7 @@
 from deepface import DeepFace
 import cv2
 import mediapipe as mp
-import os
-import pandas as pd
+import sys
 import numpy as np
 import torch
 import torch.nn as nn
@@ -45,24 +44,52 @@ model_emot.to(device)
 model_emot.eval()
 
 # Define transforms
-transform_conf = transforms.Compose([
+transform = transforms.Compose([
         transforms.Grayscale(num_output_channels=3),  # Convert to 3-channel grayscale RGB
         transforms.Resize((224, 224)),  # Resizes pixels to 224x224
         transforms.ToTensor(),       # Conveert to pytorch Tensor in [0, 1] float
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) # Normalization for ImageNet dataset
 ])
 
-transform_emot = transforms.Compose([
-        transforms.Grayscale(num_output_channels=3),  # Convert to 3-channel grayscale RGB
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5], [0.5])  # general purpose normalization with mean=0.5 and std=0.5
-])
-
 # Function to analyze video for emotion and confidence detection, define video_path to upload a video file
 # if not provided, it will use webcam
 def analyze_video(model_conf=model_conf, model_emot=model_emot, emot_thresh = 0.68,
                 conf_thresh = 0.6, use_deepface=False, video_path=None, device=device):
+    """
+    Performs real-time face, emotion, and confidence analysis on a video stream or file.
+
+    This function sets up Mediapipe for face detection, and then uses provided
+    PyTorch models (or the DeepFace library) to classify emotion and an arbitrary
+    'confidence' state for the detected face. The analysis runs approximately once
+    per second (based on video FPS) to reduce load.
+
+    If a webcam is used (i.e., `video_path` is None), it displays a live feed with
+    bounding boxes and labels. Finally, it aggregates and prints overall statistics
+    for confidence and dominant emotions.
+
+    Args:
+        model_conf (torch.nn.Module): Pre-trained PyTorch model for binary 'Confident/Non-Confident' classification.
+        model_emot (torch.nn.Module): Pre-trained PyTorch model for emotion classification (FER2013 labels).
+            Ignored if `use_deepface` is True.
+        emot_thresh (float, optional): Probability threshold for the emotion model.
+            Predictions below this threshold are labeled as 'neutral'. Defaults to 0.68.
+        conf_thresh (float, optional): Probability threshold for the 'confidence' model.
+            Predictions above this are labeled as 'Confident'. Defaults to 0.6.
+        use_deepface (bool, optional): If True, uses the DeepFace library for emotion detection,
+            ignoring `model_emot`. Defaults to False.
+        video_path (str, optional): Path to a video file to analyze. If None,
+            the function attempts to connect to a live webcam. Defaults to None.
+        device (torch.device or str, optional): The device (e.g., 'cuda' or 'cpu') on which to run the PyTorch models.
+
+    Returns:
+        tuple[float, dict]: A tuple containing:
+            - confidence_pct (float): The percentage of frames classified as 'Confident' out of all detected faces.
+            - emotion_summary (dict): A dictionary mapping the top 3 dominant emotions (str) to their percentage distribution (float).
+
+    Raises:
+        RuntimeError: If `video_path` is None and no working webcam is found.
+        ValueError: If `use_deepface` is False but `model_emot` is None.
+    """
 
     is_live = video_path is None
 
@@ -72,13 +99,45 @@ def analyze_video(model_conf=model_conf, model_emot=model_emot, emot_thresh = 0.
 
     # Video capture: webcam (0) or file path
     def get_working_camera():
-        for i in range(3):
+        # Check indices 0 through 20 to find a camera
+        max_index = 20
+        
+        is_windows = sys.platform.startswith('win')
+        is_linux = sys.platform.startswith('linux')
+        
+        print(f"Searching for camera up to index {max_index}...")
+
+        for i in range(max_index + 1):
+            cap = None
+            
+            if is_linux:
+                # 1. Try Linux V4L2 backend (CRITICAL for WSL/Linux systems)
+                cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
+                time.sleep(0.2)
+                if cap.isOpened():
+                    print(f"Using camera {i} for live detection (V4L2 Backend - WSL/Linux).")
+                    return cap
+                cap.release()
+            
+            # 2. If on Windows, try forcing DirectShow backend (for native Windows execution)
+            if is_windows:
+                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+                time.sleep(0.2)
+                if cap.isOpened():
+                    print(f"Using camera {i} for live detection (DirectShow Backend - Windows).")
+                    return cap
+                cap.release()
+                
+            # 3. Try default capture method (fallback for all OSes)
             cap = cv2.VideoCapture(i)
+            time.sleep(0.2)
             if cap.isOpened():
-                print(f"Using camera {i} for live detection.")
+                print(f"Using camera {i} for live detection (Default Backend).")
                 return cap
-        cap.release()
+            cap.release()
+
         raise RuntimeError("No working camera found.")
+    
     cap = get_working_camera() if is_live else cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps == 0 or np.isnan(fps):
@@ -137,7 +196,7 @@ def analyze_video(model_conf=model_conf, model_emot=model_emot, emot_thresh = 0.
                         result = DeepFace.analyze(face_img, actions=['emotion'], enforce_detection=False)
                         dominant_emotion = result[0]['dominant_emotion']
                     else:
-                        input_tensor_emot = transform_emot(pil_face_rgb).unsqueeze(0).to(device).float()
+                        input_tensor_emot = transform(pil_face_rgb).unsqueeze(0).to(device).float()
                         output = model_emot(input_tensor_emot)
                         # Get probability of emotion labeling
                         probabilities = F.softmax(output, dim=1)
@@ -150,7 +209,7 @@ def analyze_video(model_conf=model_conf, model_emot=model_emot, emot_thresh = 0.
 
                     # --- Confidence detection ---
                     pil_face = Image.fromarray(cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB))
-                    input_tensor_conf = transform_conf(pil_face).unsqueeze(0).to(device).float()
+                    input_tensor_conf = transform(pil_face).unsqueeze(0).to(device).float()
                     output_conf = model_conf(input_tensor_conf)
                     prob_conf = torch.softmax(output_conf, dim=1)
                     prob_class_1 = prob_conf[0,1]
@@ -214,7 +273,7 @@ def analyze_video(model_conf=model_conf, model_emot=model_emot, emot_thresh = 0.
     return confidence_pct, emotion_summary
 
 
-def predict_face_labels(frame, model_conf=model_conf, model_emot=model_emot, transform_conf=transform_conf, transform_emot=transform_emot, device=device):
+def predict_face_labels(frame, model_conf=model_conf, model_emot=model_emot, transform=transform, device=device):
 
     # Setup Mediapipe face detection
     mp_face_detection = mp.solutions.face_detection
@@ -252,14 +311,14 @@ def predict_face_labels(frame, model_conf=model_conf, model_emot=model_emot, tra
         face_pil = Image.fromarray(cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB))
 
         # Confidence prediction
-        face_conf = transform_conf(face_pil).unsqueeze(0).to(device)
+        face_conf = transform(face_pil).unsqueeze(0).to(device)
         with torch.no_grad():
             conf_output = model_conf(face_conf)
             conf_pred = torch.argmax(conf_output, dim=1).item()
             conf_label = 'Confident' if conf_pred == 0 else 'Unconfident'
 
         # Emotion prediction
-        face_emot = transform_emot(face_pil).unsqueeze(0).to(device)
+        face_emot = transform(face_pil).unsqueeze(0).to(device)
         with torch.no_grad():
             emot_output = model_emot(face_emot)
             probs = F.softmax(emot_output, dim=1)
