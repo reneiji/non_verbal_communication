@@ -274,6 +274,30 @@ def analyze_video(model_conf=model_conf, model_emot=model_emot, emot_thresh = 0.
 
 
 def predict_face_labels(frame, model_conf=model_conf, model_emot=model_emot, transform=transform, device=device):
+    '''
+    Performs facial confidence and emotion on a static image.
+
+    This function utilizes PyTorch pre-trained ResNet18 architecture for facial emotion and confidence 
+    detection and MediaPipe for facial detection. The main purpose of this function is to do a 
+    quality check on how the model would perform on an unseen arbitrary head shots of various people
+    displaying a variety of emotions.
+
+    Args:
+        model_conf (torch.nn.Module): Pre-trained PyTorch model for binary 'Confident/Non-Confident' classification.
+        model_emot (torch.nn.Module): Pre-trained PyTorch model for emotion classification (FER2013 labels).
+            Ignored if `use_deepface` is True.
+        emot_thresh (float, optional): Probability threshold for the emotion model.
+            Predictions below this threshold are labeled as 'neutral'. Defaults to 0.68.
+        conf_thresh (float, optional): Probability threshold for the 'confidence' model.
+            Predictions above this are labeled as 'Confident'. Defaults to 0.6.
+        use_deepface (bool, optional): If True, uses the DeepFace library for emotion detection,
+            ignoring `model_emot`. Defaults to False.
+        frame (str): Path to a image file to analyze.
+        device (torch.device or str, optional): The device (e.g., 'cuda' or 'cpu') on which to run the PyTorch models.
+
+    Returns:  
+        The image framing the face and the detected facial emotion and confidence.
+    '''
 
     # Setup Mediapipe face detection
     mp_face_detection = mp.solutions.face_detection
@@ -359,7 +383,6 @@ def predict_face_labels(frame, model_conf=model_conf, model_emot=model_emot, tra
                     cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
     return output_frame
 
-# === THIS GOES AT BOTTOM of face_model.py ===
 if __name__ == "__main__":
     print("=== Starting live webcam detection ===")
     analyze_video()
